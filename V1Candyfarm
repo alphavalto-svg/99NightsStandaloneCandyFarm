@@ -1,0 +1,2516 @@
+
+local Services = {
+    Players = game:GetService("Players"),
+    Workspace = game:GetService("Workspace"),
+    ReplicatedStorage = game:GetService("ReplicatedStorage"),
+    CoreGui = game:GetService("CoreGui"),
+    RunService = game:GetService("RunService"),
+    UserInputService = game:GetService("UserInputService")
+}
+
+local LocalPlayer = Services.Players.LocalPlayer
+
+
+local RemoteEvents = Services.ReplicatedStorage:WaitForChild("RemoteEvents", 10)
+local Remotes = {
+    StartDrag = RemoteEvents and RemoteEvents:FindFirstChild("RequestStartDraggingItem"),
+    StopDrag = RemoteEvents and RemoteEvents:FindFirstChild("StopDraggingItem"),
+    Burn = RemoteEvents and RemoteEvents:FindFirstChild("RequestBurnItem"),
+    EquipItem = RemoteEvents and RemoteEvents:FindFirstChild("EquipItemHandle"),
+    ToolDamage = RemoteEvents and RemoteEvents:FindFirstChild("ToolDamageObject"),
+    CollectCoins = RemoteEvents and (RemoteEvents:FindFirstChild("RequestCollectCoins") or RemoteEvents:FindFirstChild("RequestCollectCoints")),
+    DamagePlayer = RemoteEvents and RemoteEvents:FindFirstChild("DamagePlayer"),
+    RequestHotbarItem = RemoteEvents and RemoteEvents:FindFirstChild("RequestHotbarItem"),
+    ChristmasDecorate = RemoteEvents and RemoteEvents:FindFirstChild("RequestChristmasDecorate"),
+    BuySantaSack = RemoteEvents and RemoteEvents:FindFirstChild("RequestBuySantaSack"),
+    PlaceStructure = RemoteEvents and RemoteEvents:FindFirstChild("RequestPlaceStructure"),
+    ElfStuckInTree = RemoteEvents and RemoteEvents:FindFirstChild("Elf_StuckInTree"),
+    ElfSlippedOnIce = RemoteEvents and RemoteEvents:FindFirstChild("Elf_SlippedOnIce"),
+    ElfIceRace = RemoteEvents and RemoteEvents:FindFirstChild("Elf_IceRace"),
+    OpenItemChest = RemoteEvents and RemoteEvents:FindFirstChild("RequestOpenItemChest"),
+    CollectCandyCane = RemoteEvents and RemoteEvents:FindFirstChild("RequestCollectCandyCane"),
+    SnowShovelDig = RemoteEvents and RemoteEvents:FindFirstChild("RequestSnowShovelDig"),
+    AcceptPlayAgain = RemoteEvents and RemoteEvents:FindFirstChild("AcceptPlayAgain")
+}
+
+
+
+local Config = {
+    
+    IsRunning = false,
+    Phase = "Idle", 
+    
+    
+    SpiralSpeed = 1000, 
+    RadiusStep = 150, 
+    HeightAboveTerrain = 45, 
+    
+    
+    TeleportHeight = 15,
+    RefillCooldown = 0.1, 
+    LastRefillTime = 0,
+    TeleportedItems = {}, 
+    
+    
+    TreeDamageId = "1_9321896061",
+    ChoppingCooldown = 0.3,
+    ChoppingRange = 50, 
+    DamageBatchSize = 8, 
+    LastChopTime = 0,
+    CurrentTreeTarget = nil,
+    EquippedAxe = nil,
+    
+    
+    FlyEnabled = false,
+    FlyConnection = nil,
+    BodyGyro = nil,
+    BodyVelocity = nil,
+    BodyPosition = nil,
+    OriginalWalkSpeed = nil,
+    OriginalJumpPower = nil,
+    OriginalJumpHeight = nil,
+    
+    
+    MainThread = nil,
+    SpiralThread = nil,
+    RefillThread = nil,
+    GodModeThread = nil,
+    LightsThread = nil,
+    PresentsThread = nil,
+    CandyCaneThread = nil,
+    
+    
+    GodModeInterval = 1, 
+    LastGodModeTime = 0,
+    
+    
+    LightsCollected = 0,
+    TargetLightsCount = 12, 
+    
+    
+    TreesDecorated = 0,
+    TargetTreesCount = 12, 
+    
+    
+    LaddersToBuy = 3,
+    LaddersBought = 0,
+    ElvesRescued = 0,
+    
+    
+    FactoryKillRange = 90,
+    FactoryDamageId = "1_9321896061",
+    FactoryAttackCooldown = 0.3,
+    FactoryDamageBatchSize = 8,
+    TurretsDestroyed = 0,
+    SantaKilled = false,
+    
+    
+    ItemsRefilled = 0,
+    CoinsCollected = 0,
+    TreesChopped = 0,
+    StartFireLevel = 0,
+    CurrentFireLevel = 0
+}
+
+
+
+
+
+local function getMapRange()
+    local mapRange = Services.Workspace:GetAttribute("MapRange")
+    if mapRange then
+        if type(mapRange) == "string" then
+            mapRange = tonumber(mapRange) or 145
+        end
+        return mapRange
+    end
+    return 145
+end
+
+local function getFireLevel()
+    local progress = Services.Workspace:GetAttribute("Progress")
+    if progress then
+        if type(progress) == "string" then
+            progress = tonumber(progress) or 1
+        end
+        return progress
+    end
+    return 1
+end
+
+local function getCampfirePosition()
+    local campfire = Services.Workspace.Map and 
+                     Services.Workspace.Map.Campground and 
+                     Services.Workspace.Map.Campground.MainFire
+    if campfire and campfire:FindFirstChild("Center") then
+        return campfire.Center.Position
+    end
+    return nil
+end
+
+local function getMainFire()
+    return Services.Workspace.Map and 
+           Services.Workspace.Map.Campground and 
+           Services.Workspace.Map.Campground.MainFire
+end
+
+local function getCharacter()
+    return LocalPlayer.Character
+end
+
+local function getHRP()
+    local char = getCharacter()
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function teleportToCampfire()
+    local hrp = getHRP()
+    local campfirePos = getCampfirePosition()
+    if hrp and campfirePos then
+        hrp.CFrame = CFrame.new(campfirePos + Vector3.new(0, 5, 0))
+    end
+end
+
+
+
+
+
+
+local OriginalCollisionStates = {}
+
+local function enableNoclip()
+    local char = getCharacter()
+    if not char then return end
+    
+    for _, part in pairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            OriginalCollisionStates[part] = part.CanCollide
+            part.CanCollide = false
+        end
+    end
+end
+
+local function disableNoclip()
+    for part, originalState in pairs(OriginalCollisionStates) do
+        if part and part.Parent then
+            part.CanCollide = originalState
+        end
+    end
+    OriginalCollisionStates = {}
+end
+
+
+local disableFly
+
+local function enableFly()
+    if Config.FlyEnabled then return end
+    
+    local char = getCharacter()
+    local hrp = getHRP()
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+    
+    if not hrp or not humanoid then return end
+    
+    Config.FlyEnabled = true
+    
+    
+    Config.OriginalWalkSpeed = humanoid.WalkSpeed
+    Config.OriginalJumpPower = humanoid.JumpPower
+    Config.OriginalJumpHeight = humanoid.JumpHeight
+    
+    
+    humanoid.PlatformStand = true
+    humanoid.WalkSpeed = 0
+    humanoid.JumpPower = 0
+    humanoid.JumpHeight = 0
+    
+    
+    enableNoclip()
+    
+    
+    Config.BodyGyro = Instance.new("BodyGyro")
+    Config.BodyGyro.Name = "FlyGyro"
+    Config.BodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    Config.BodyGyro.P = 1e6
+    Config.BodyGyro.D = 1e3
+    Config.BodyGyro.CFrame = hrp.CFrame
+    Config.BodyGyro.Parent = hrp
+    
+    
+    Config.BodyVelocity = Instance.new("BodyVelocity")
+    Config.BodyVelocity.Name = "FlyVelocity"
+    Config.BodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    Config.BodyVelocity.Velocity = Vector3.zero
+    Config.BodyVelocity.Parent = hrp
+    
+    
+    Config.BodyPosition = Instance.new("BodyPosition")
+    Config.BodyPosition.Name = "FlyPosition"
+    Config.BodyPosition.MaxForce = Vector3.new(0, 0, 0) 
+    Config.BodyPosition.P = 1e5
+    Config.BodyPosition.D = 1e4
+    Config.BodyPosition.Position = hrp.Position
+    Config.BodyPosition.Parent = hrp
+    
+    
+    Config.FlyConnection = Services.RunService.Heartbeat:Connect(function()
+        if not Config.FlyEnabled then return end
+        
+        local char = getCharacter()
+        local hrp = getHRP()
+        local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+        
+        if not hrp or not humanoid then
+            disableFly()
+            return
+        end
+        
+        
+        humanoid.PlatformStand = true
+        
+        
+        for _, part in pairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                OriginalCollisionStates[part] = OriginalCollisionStates[part] or true
+                part.CanCollide = false
+            end
+        end
+        
+        
+        if Config.BodyGyro then
+            Config.BodyGyro.CFrame = hrp.CFrame
+        end
+        
+        
+        if Config.BodyVelocity then
+            Config.BodyVelocity.Velocity = Vector3.zero
+        end
+        
+        
+        if Config.BodyPosition then
+            Config.BodyPosition.Position = hrp.Position
+            Config.BodyPosition.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        end
+        
+        
+        hrp.Velocity = Vector3.zero
+        hrp.RotVelocity = Vector3.zero
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyAngularVelocity = Vector3.zero
+    end)
+end
+
+disableFly = function()
+    if not Config.FlyEnabled then return end
+    
+    Config.FlyEnabled = false
+    
+    
+    if Config.FlyConnection then
+        Config.FlyConnection:Disconnect()
+        Config.FlyConnection = nil
+    end
+    
+    
+    disableNoclip()
+    
+    
+    local char = getCharacter()
+    local humanoid = char and char:FindFirstChildOfClass("Humanoid")
+    
+    if humanoid then
+        humanoid.PlatformStand = false
+        humanoid.WalkSpeed = Config.OriginalWalkSpeed or 16
+        humanoid.JumpPower = Config.OriginalJumpPower or 50
+        humanoid.JumpHeight = Config.OriginalJumpHeight or 7.2
+    end
+    
+    
+    if Config.BodyGyro then
+        Config.BodyGyro:Destroy()
+        Config.BodyGyro = nil
+    end
+    
+    if Config.BodyVelocity then
+        Config.BodyVelocity:Destroy()
+        Config.BodyVelocity = nil
+    end
+    
+    if Config.BodyPosition then
+        Config.BodyPosition:Destroy()
+        Config.BodyPosition = nil
+    end
+end
+
+
+
+
+
+local function getCampfire()
+    local map = Services.Workspace:FindFirstChild("Map")
+    if map then
+        local camp = map:FindFirstChild("Campground")
+        if camp then return camp:FindFirstChild("MainFire") end
+    end
+    return nil
+end
+
+local function isBurnable(item)
+    if not item then return false end
+    local name = item.Name:lower()
+    
+    
+    if name:find("coin") or name:find("money") or name:find("cash") or 
+       name:find("stack") or name:find("candy") or name:find("santa") or 
+       name:find("bolt") or name:find("berry") or name:find("revolver") or 
+       name:find("rifle") or name:find("gun") or name:find("pistol") or 
+       name:find("sword") or name:find("knife") or name:find("potion") then
+        return false
+    end
+
+    
+    if name:find("log") or name:find("wood") or name:find("plank") or
+       (name:find("oil") or (name:find("barrel") and name ~= "barrel" and not name:find("gun") and not name:find("rifle"))) or
+       name:find("coal") or name:find("gas") or name:find("fuel") or name:find("canister") or
+       name:find("shelf") or name:find("trap") or name:find("sign") or name:find("storage") or 
+       name:find("lightning") or name:find("farm") or name:find("plot") or name:find("teleporter") or 
+       name:find("torch") or name:find("fridge") or name:find("wall") or name:find("map") or 
+       name:find("bed") or name:find("bench") or name:find("dial") or name:find("compass") or 
+       name:find("scanner") or name:find("crock") or name:find("pot") or name:find("radar") or 
+       name:find("pad") or name:find("processor") or name:find("drill") or name:find("machine") or 
+       name:find("capsule") or name:find("accelerometer") or name:find("present") or name:find("gift") then
+        return true
+    end
+    
+    return false
+end
+
+local function burnItem(item)
+    if not item or not item.Parent then return false end
+    local campfire = getCampfire()
+    if not campfire then return false end
+    
+    local firePos = nil
+    if campfire:IsA("Model") and campfire.PrimaryPart then
+        firePos = campfire.PrimaryPart.Position
+    elseif campfire:IsA("BasePart") then
+        firePos = campfire.Position
+    end
+    
+    local innerZone = campfire:FindFirstChild("InnerTouchZone")
+    if innerZone then firePos = innerZone.Position end
+    
+    if not firePos then return false end
+    local dropPos = firePos + Vector3.new(0, Config.TeleportHeight, 0)
+    
+    local success = pcall(function()
+        if Remotes.StartDrag then Remotes.StartDrag:FireServer(item) end
+        
+        pcall(function()
+            if sethiddenproperty then sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge) end
+            local targetPart = (item:IsA("Model") and item.PrimaryPart) or (item:IsA("BasePart") and item)
+            if targetPart then
+                if sethiddenproperty then sethiddenproperty(targetPart, "NetworkOwnershipRule", Enum.NetworkOwnership.Manual) end
+                pcall(function() targetPart:SetNetworkOwner(LocalPlayer) end)
+                targetPart.Anchored = false 
+                targetPart.CanCollide = true 
+                targetPart.Velocity = Vector3.zero
+            end
+        end)
+
+        if item:IsA("Model") then 
+            item:PivotTo(CFrame.new(dropPos)) 
+        elseif item:IsA("BasePart") then
+            item.CFrame = CFrame.new(dropPos)
+        end
+        
+        task.wait(0.2)
+        
+        if Remotes.Burn then
+            item:SetAttribute("BurnFuel", true) 
+            item:SetAttribute("Owner", LocalPlayer.UserId)
+            Remotes.Burn:FireServer(campfire, item)
+            
+            task.wait(0.3)
+            pcall(function() if item and item.Parent then item:Destroy() end end)
+        end
+    end)
+    
+    if success then
+        Config.ItemsRefilled = Config.ItemsRefilled + 1
+    end
+    
+    return success
+end
+
+local function runRefillSystem()
+    while Config.IsRunning and Config.Phase == "Discovery" do
+        local currentTime = tick()
+        
+        
+        if currentTime - Config.LastRefillTime < Config.RefillCooldown then
+            task.wait(0.05)
+            continue
+        end
+        
+        
+        local scanFolders = {}
+        local itemsFolder = Services.Workspace:FindFirstChild("Items")
+        if itemsFolder then table.insert(scanFolders, itemsFolder) end
+        local christmasFolder = Services.Workspace:FindFirstChild("Christmas")
+        if christmasFolder then table.insert(scanFolders, christmasFolder) end
+        
+        for _, folder in ipairs(scanFolders) do
+            if not Config.IsRunning or Config.Phase ~= "Discovery" then break end
+            for _, item in ipairs(folder:GetChildren()) do
+                if not Config.IsRunning or Config.Phase ~= "Discovery" then break end
+                if (item:IsA("Model") or item:IsA("BasePart")) and isBurnable(item) then
+                    burnItem(item)
+                    Config.LastRefillTime = tick()
+                    task.wait(0.1)
+                end
+            end
+        end
+        
+        task.wait(0.5)
+    end
+end
+
+
+
+
+
+local function runSpiralDiscovery()
+    local campfirePos = getCampfirePosition()
+    if not campfirePos then return end
+    
+    local maxRadius = getMapRange()
+    local currentRadius = 10
+    local currentAngle = 0
+    
+    while Config.IsRunning and Config.Phase == "Discovery" do
+        local hrp = getHRP()
+        if not hrp then break end
+        
+        
+        Config.CurrentFireLevel = getFireLevel()
+        if Config.CurrentFireLevel >= 6 then
+            Config.Phase = "CoinCollection"
+            break
+        end
+        
+        
+        local newMaxRadius = getMapRange()
+        if newMaxRadius > maxRadius then
+            maxRadius = newMaxRadius
+        end
+        
+        
+        local angularSpeed = Config.SpiralSpeed / currentRadius
+        local degreesPerFrame = math.deg(angularSpeed) / 60
+        
+        
+        currentAngle = currentAngle + degreesPerFrame
+        
+        
+        if currentAngle >= 360 then
+            currentAngle = currentAngle - 360
+            currentRadius = currentRadius + Config.RadiusStep
+            
+            if currentRadius > maxRadius then
+                
+                local checkMaxRadius = getMapRange()
+                if checkMaxRadius > maxRadius then
+                    maxRadius = checkMaxRadius
+                else
+                    
+                    currentRadius = 10
+                    currentAngle = 0
+                end
+            end
+        end
+        
+        
+        local angleRad = math.rad(currentAngle)
+        local offsetX = math.cos(angleRad) * currentRadius
+        local offsetZ = math.sin(angleRad) * currentRadius
+        
+        local targetPosition = campfirePos + Vector3.new(offsetX, Config.HeightAboveTerrain, offsetZ)
+        hrp.CFrame = CFrame.new(targetPosition)
+        
+        task.wait(1/60)
+    end
+end
+
+
+
+
+
+local function collectCoin(item)
+    if not item or not Remotes.CollectCoins then return end
+    
+    local args = {item}
+    if item.Parent and item.Parent:IsA("Model") then
+        table.insert(args, item.Parent)
+    end
+    
+    for _, arg in ipairs(args) do
+        pcall(function()
+            if Remotes.CollectCoins:IsA("RemoteFunction") then
+                Remotes.CollectCoins:InvokeServer(arg)
+            else
+                Remotes.CollectCoins:FireServer(arg)
+            end
+        end)
+    end
+    
+    Config.CoinsCollected = Config.CoinsCollected + 1
+end
+
+local function runCoinCollection()
+    
+    disableFly()
+    teleportToCampfire()
+    task.wait(0.5)
+    
+    while Config.IsRunning and Config.Phase == "CoinCollection" do
+        local coinsFound = 0
+        
+        
+        local scanFolders = {}
+        
+        local itemsFolder = Services.Workspace:FindFirstChild("Items")
+        if itemsFolder then table.insert(scanFolders, itemsFolder) end
+        
+        local christmasFolder = Services.Workspace:FindFirstChild("Christmas")
+        if christmasFolder then table.insert(scanFolders, christmasFolder) end
+        
+        local hrp = getHRP()
+        local playerPos = hrp and hrp.Position
+        
+        for _, folder in ipairs(scanFolders) do
+            for _, item in ipairs(folder:GetChildren()) do
+                if not Config.IsRunning then break end
+                
+                if item:IsA("Model") or item:IsA("BasePart") then
+                    local name = item.Name:lower()
+                    
+                    if name:find("coin") then
+                        
+                        if playerPos then
+                            local mainPart = item:FindFirstChild("Main") or item:FindFirstChildWhichIsA("BasePart")
+                            if mainPart then
+                                mainPart.CFrame = CFrame.new(playerPos + Vector3.new(math.random(-3, 3), 2, math.random(-3, 3)))
+                            end
+                        end
+                        
+                        task.wait(0.1)
+                        collectCoin(item)
+                        coinsFound = coinsFound + 1
+                        
+                        if coinsFound % 10 == 0 then
+                            task.wait(0.2)
+                        end
+                    end
+                end
+            end
+        end
+        
+        
+        if coinsFound == 0 then
+            Config.Phase = "TreeCutting"
+            break
+        end
+        
+        task.wait(2) 
+    end
+end
+
+
+
+
+
+local function runGodMode()
+    while Config.IsRunning do
+        local currentTime = tick()
+        
+        if currentTime - Config.LastGodModeTime >= Config.GodModeInterval then
+            Config.LastGodModeTime = currentTime
+            
+            if Remotes.DamagePlayer then
+                pcall(function()
+                    Remotes.DamagePlayer:FireServer(-math.huge)
+                end)
+            end
+        end
+        
+        task.wait(1)
+    end
+end
+
+
+
+
+
+local function collectChristmasLights()
+    local itemsFolder = Services.Workspace:FindFirstChild("Items")
+    if not itemsFolder then return end
+    
+    local hrp = getHRP()
+    if not hrp then return end
+    
+    for _, item in pairs(itemsFolder:GetChildren()) do
+        if not Config.IsRunning then break end
+        
+        local name = item.Name:lower()
+        if name:find("christmas lights") or name:find("christmaslights") or name == "christmas lights" then
+            local targetPart = (item:IsA("Model") and item.PrimaryPart) or (item:IsA("BasePart") and item) or item:FindFirstChildWhichIsA("BasePart")
+            
+            if targetPart then
+                
+                local newPos = hrp.Position + Vector3.new(0, 2, 0)
+                pcall(function()
+                    if item:IsA("Model") then
+                        item:PivotTo(CFrame.new(newPos))
+                    else
+                        item.CFrame = CFrame.new(newPos)
+                    end
+                end)
+                
+                task.wait(0.1)
+                
+                
+                if Remotes.RequestHotbarItem then
+                    pcall(function()
+                        Remotes.RequestHotbarItem:InvokeServer(item)
+                    end)
+                end
+                
+                
+                if Remotes.StartDrag then
+                    pcall(function()
+                        Remotes.StartDrag:FireServer(item)
+                    end)
+                end
+                
+                
+                for _, desc in pairs(item:GetDescendants()) do
+                    if desc:IsA("ProximityPrompt") then
+                        pcall(function()
+                            fireproximityprompt(desc)
+                        end)
+                    end
+                end
+                
+                Config.LightsCollected = Config.LightsCollected + 1
+                task.wait(0.2)
+            end
+        end
+    end
+end
+
+local function runLightsCollection()
+    while Config.IsRunning do
+        collectChristmasLights()
+        task.wait(0.5)
+    end
+end
+
+
+
+
+
+local function openChristmasPresents()
+    local itemsFolder = Services.Workspace:FindFirstChild("Items")
+    if not itemsFolder or not Remotes.OpenItemChest then return end
+    
+    for _, item in pairs(itemsFolder:GetChildren()) do
+        if item.Name == "ChristmasPresent1" or item.Name == "ChristmasPresent2" then
+            pcall(function()
+                Remotes.OpenItemChest:FireServer(item)
+            end)
+        end
+    end
+end
+
+local function runPresentsCollection()
+    while true do
+        openChristmasPresents()
+        task.wait(1)
+    end
+end
+
+local function runCandyCaneCollection()
+    while true do
+        if Remotes.CollectCandyCane then
+            pcall(function()
+                Remotes.CollectCandyCane:FireServer(20, "Present")
+            end)
+        end
+        task.wait(1)
+    end
+end
+
+
+
+
+
+local function openChristmasPresents()
+    local itemsFolder = Services.Workspace:FindFirstChild("Items")
+    if not itemsFolder or not Remotes.OpenItemChest then return end
+    
+    for _, item in pairs(itemsFolder:GetChildren()) do
+        if item.Name == "ChristmasPresent1" or item.Name == "ChristmasPresent2" then
+            pcall(function()
+                Remotes.OpenItemChest:FireServer(item)
+            end)
+        end
+    end
+end
+
+local function runPresentsCollection()
+    while true do
+        openChristmasPresents()
+        task.wait(1)
+    end
+end
+
+local function runCandyCaneCollection()
+    while true do
+        if Remotes.CollectCandyCane then
+            pcall(function()
+                Remotes.CollectCandyCane:FireServer(20, "Present")
+            end)
+        end
+        task.wait(1)
+    end
+end
+
+
+
+
+
+local function hasItemInInventory(itemName)
+    local inventory = LocalPlayer:FindFirstChild("Inventory")
+    if not inventory then return false end
+    
+    
+    if inventory:FindFirstChild(itemName) then return true end
+    
+    
+    local lowerName = itemName:lower()
+    for _, item in pairs(inventory:GetChildren()) do
+        if item.Name:lower():find(lowerName) then
+            return true
+        end
+    end
+    
+    return false
+end
+
+local function buyLadder()
+    if not Remotes.BuySantaSack then return false end
+    
+    
+    if hasItemInInventory("Ladder Blueprint") or hasItemInInventory("Ladder") then
+        return true
+    end
+    
+    local success = pcall(function()
+        Remotes.BuySantaSack:FireServer("Ladder")
+    end)
+    
+    if success then
+        Config.LaddersBought = Config.LaddersBought + 1
+    end
+    
+    return success
+end
+
+local function buySnowShovel()
+    if not Remotes.BuySantaSack then return false end
+    
+    
+    if hasItemInInventory("Snow Shovel") or hasItemInInventory("Shovel") then
+        return true
+    end
+    
+    local success = pcall(function()
+        Remotes.BuySantaSack:FireServer("Shovel")
+    end)
+    
+    return success
+end
+
+local function buyIceSkates()
+    if not Remotes.BuySantaSack then return false end
+    
+    
+    if hasItemInInventory("Ice Skates") or hasItemInInventory("Skate") then
+        return true
+    end
+    
+    local success = pcall(function()
+        Remotes.BuySantaSack:FireServer("Ice Skates")
+    end)
+    
+    return success
+end
+
+local function findElvesNeedingHelp()
+    local stuckElves = {}      
+    local fallenElves = {}     
+    local snowElves = {}       
+    local iceRaceElves = {}    
+    local landmarks = Services.Workspace.Map and Services.Workspace.Map:FindFirstChild("Landmarks")
+    if not landmarks then return stuckElves, fallenElves, snowElves, iceRaceElves end
+    
+    for _, landmark in pairs(landmarks:GetChildren()) do
+        local functional = landmark:FindFirstChild("Functional")
+        if functional then
+            
+            local stuckElf = functional:FindFirstChild("Stuck Elf")
+            if stuckElf and not stuckElf:GetAttribute("Rescued") and not stuckElf:GetAttribute("ElfSaved") then
+                table.insert(stuckElves, stuckElf)
+            end
+            
+            
+            local fallenElf = functional:FindFirstChild("Fallen Elf")
+            if fallenElf and not fallenElf:GetAttribute("Rescued") and not fallenElf:GetAttribute("ElfSaved") then
+                table.insert(fallenElves, fallenElf)
+            end
+        end
+        
+        
+        if landmark.Name == "Elf In Snow" or landmark.Name:find("Elf In Snow") then
+            local functional = landmark:FindFirstChild("Functional")
+            if functional then
+                local destructibleSnow = functional:FindFirstChild("DestructibleSnow")
+                if destructibleSnow and #destructibleSnow:GetChildren() > 0 then
+                    table.insert(snowElves, {
+                        landmark = landmark,
+                        functional = functional,
+                        destructibleSnow = destructibleSnow
+                    })
+                end
+            end
+        end
+        
+        
+        if landmark.Name == "Elf Ice Race" or landmark.Name:find("Elf Ice Race") then
+            print("[DEBUG] Found Ice Race landmark:", landmark.Name)
+            local functional = landmark:FindFirstChild("Functional")
+            if functional then
+                print("[DEBUG] Functional found in:", landmark.Name)
+                local elf = functional:FindFirstChild("Elf")
+                if elf then
+                    print("[DEBUG] Elf found! Adding to iceRaceElves")
+                    
+                    table.insert(iceRaceElves, {
+                        elf = elf,
+                        functional = functional,
+                        landmark = landmark
+                    })
+                else
+                    print("[DEBUG] No Elf in Functional - race already done")
+                end
+            else
+                print("[DEBUG] No Functional in landmark")
+            end
+        end
+    end
+    
+    print("[DEBUG] findElvesNeedingHelp results: Stuck=", #stuckElves, "Fallen=", #fallenElves, "Snow=", #snowElves, "IceRace=", #iceRaceElves)
+    return stuckElves, fallenElves, snowElves, iceRaceElves
+end
+
+local function getLadderBlueprintFromInventory()
+    local inventory = LocalPlayer:FindFirstChild("Inventory")
+    if not inventory then return nil end
+    
+    
+    local exactMatch = inventory:FindFirstChild("Ladder Blueprint")
+    if exactMatch then return exactMatch end
+    
+    
+    local ladderMatch = inventory:FindFirstChild("Ladder")
+    if ladderMatch then return ladderMatch end
+    
+    
+    for _, item in pairs(inventory:GetChildren()) do
+        local name = item.Name:lower()
+        if name:find("ladder") then
+            return item
+        end
+    end
+    
+    return nil
+end
+
+local function getPlacedLadder()
+    local structures = Services.Workspace:FindFirstChild("Structures")
+    if not structures then return nil end
+    
+    for _, structure in pairs(structures:GetChildren()) do
+        if structure.Name == "Ladder" or structure.Name:find("Ladder") then
+            return structure
+        end
+    end
+    
+    return nil
+end
+
+local function getHotbarSlotForItem(itemName)
+    local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not playerGui then return nil end
+    
+    local interface = playerGui:FindFirstChild("Interface")
+    if not interface then return nil end
+    
+    local hotbar = interface:FindFirstChild("Hotbar")
+    if not hotbar then return nil end
+    
+    
+    local exactButton = hotbar:FindFirstChild("Button" .. itemName)
+    if exactButton then
+        local numberLabel = exactButton:FindFirstChild("Number")
+        if numberLabel and numberLabel:IsA("TextLabel") then
+            return tonumber(numberLabel.Text)
+        end
+    end
+    
+    
+    for _, button in pairs(hotbar:GetChildren()) do
+        if button.Name:lower():find(itemName:lower()) then
+            local numberLabel = button:FindFirstChild("Number")
+            if numberLabel and numberLabel:IsA("TextLabel") then
+                return tonumber(numberLabel.Text)
+            end
+        end
+    end
+    
+    return nil
+end
+
+local function isHoldingItem(itemName)
+    local char = getCharacter()
+    if not char then return false end
+    
+    local toolHandle = char:FindFirstChild("ToolHandle")
+    if not toolHandle then return false end
+    
+    local originalItem = toolHandle:FindFirstChild("OriginalItem")
+    if not originalItem or not originalItem:IsA("ObjectValue") then return false end
+    
+    local heldItem = originalItem.Value
+    if not heldItem then return false end
+    
+    
+    if heldItem.Name == itemName then return true end
+    if heldItem.Name:lower():find(itemName:lower()) then return true end
+    
+    return false
+end
+
+local function pressNumberKey(num)
+    if not num or num < 1 or num > 9 then return false end
+    
+    local keyCode = Enum.KeyCode["One"]
+    if num == 1 then keyCode = Enum.KeyCode.One
+    elseif num == 2 then keyCode = Enum.KeyCode.Two
+    elseif num == 3 then keyCode = Enum.KeyCode.Three
+    elseif num == 4 then keyCode = Enum.KeyCode.Four
+    elseif num == 5 then keyCode = Enum.KeyCode.Five
+    elseif num == 6 then keyCode = Enum.KeyCode.Six
+    elseif num == 7 then keyCode = Enum.KeyCode.Seven
+    elseif num == 8 then keyCode = Enum.KeyCode.Eight
+    elseif num == 9 then keyCode = Enum.KeyCode.Nine
+    end
+    
+    
+    local vimSuccess = pcall(function()
+        local VIM = game:GetService("VirtualInputManager")
+        VIM:SendKeyEvent(true, keyCode, false, game)
+        task.wait(0.05)
+        VIM:SendKeyEvent(false, keyCode, false, game)
+    end)
+    
+    
+    if not vimSuccess then
+        pcall(function()
+            keypress(keyCode.Value)
+            task.wait(0.05)
+            keyrelease(keyCode.Value)
+        end)
+    end
+    
+    return true
+end
+
+local function equipLadderBlueprint()
+    
+    if isHoldingItem("Ladder Blueprint") or isHoldingItem("Ladder") then
+        return true
+    end
+    
+    
+    local slotNum = getHotbarSlotForItem("Ladder Blueprint") or getHotbarSlotForItem("Ladder")
+    
+    if slotNum then
+        
+        pressNumberKey(slotNum)
+        task.wait(0.5)
+        
+        
+        if isHoldingItem("Ladder Blueprint") or isHoldingItem("Ladder") then
+            return true
+        end
+    end
+    
+    return isHoldingItem("Ladder Blueprint") or isHoldingItem("Ladder")
+end
+
+local function placeLadderNearElf(elf, ladderBlueprint)
+    if not elf then return false end
+    
+    
+    local hrp = getHRP()
+    if not hrp then return false end
+    
+    
+    local elfPos = elf:GetPivot().Position
+    
+    
+    local groundY = elfPos.Y - 25
+    local standPos = Vector3.new(elfPos.X + 10, groundY, elfPos.Z)
+    hrp.CFrame = CFrame.lookAt(standPos, Vector3.new(elfPos.X, groundY, elfPos.Z))
+    task.wait(0.5)
+    
+    
+    if not equipLadderBlueprint() then
+        return false
+    end
+    task.wait(1) 
+    
+    
+    local camera = Services.Workspace.CurrentCamera
+    local screenSize = camera and camera.ViewportSize or Vector2.new(1920, 1080)
+    local clickX = screenSize.X - 100  
+    local clickY = screenSize.Y - 100  
+    
+    pcall(function()
+        local VIM = game:GetService("VirtualInputManager")
+        VIM:SendMouseButtonEvent(clickX, clickY, 0, true, game, 1)
+        task.wait(0.1)
+        VIM:SendMouseButtonEvent(clickX, clickY, 0, false, game, 1)
+    end)
+    
+    task.wait(0.3)
+    
+    pcall(function()
+        mouse1click()
+    end)
+    
+    task.wait(0.5)
+    return true
+end
+
+local function helpElfWithLadder(elf, ladder)
+    if not elf or not ladder or not Remotes.ElfStuckInTree then return false end
+    
+    local success = pcall(function()
+        Remotes.ElfStuckInTree:FireServer(elf, ladder)
+    end)
+    
+    if success then
+        Config.ElvesRescued = Config.ElvesRescued + 1
+    end
+    
+    return success
+end
+
+local function helpFallenElf(elf)
+    if not elf or not Remotes.ElfSlippedOnIce then return false end
+    
+    local success = pcall(function()
+        Remotes.ElfSlippedOnIce:FireServer(elf)
+    end)
+    
+    if success then
+        Config.ElvesRescued = Config.ElvesRescued + 1
+    end
+    
+    return success
+end
+
+local function helpIceRaceElf(iceRaceData)
+    print("[DEBUG] helpIceRaceElf called")
+    if not iceRaceData then print("[DEBUG] iceRaceData is nil") return false end
+    if not iceRaceData.elf then print("[DEBUG] iceRaceData.elf is nil") return false end
+    if not iceRaceData.functional then print("[DEBUG] iceRaceData.functional is nil") return false end
+    
+    print("[DEBUG] iceRaceData valid. Elf:", iceRaceData.elf.Name, "Functional:", iceRaceData.functional.Name)
+    
+    
+    local RemoteEvents = Services.ReplicatedStorage:FindFirstChild("RemoteEvents")
+    local ElfIceRace = RemoteEvents and RemoteEvents:FindFirstChild("Elf_IceRace")
+    
+    if not ElfIceRace then 
+        print("[DEBUG] Elf_IceRace remote NOT FOUND!")
+        return false 
+    end
+    print("[DEBUG] Elf_IceRace remote found, firing...")
+    
+    local success, err = pcall(function()
+        ElfIceRace:FireServer(iceRaceData.elf, iceRaceData.functional)
+    end)
+    
+    print("[DEBUG] FireServer result: success=", success, "err=", err)
+    
+    if success then
+        Config.ElvesRescued = Config.ElvesRescued + 1
+    end
+    
+    return success
+end
+
+local function findPlacedLadderNearElf(elfPos)
+    local structures = Services.Workspace:FindFirstChild("Structures")
+    if not structures then return nil end
+    
+    
+    local CollectionService = game:GetService("CollectionService")
+    local ladderTops = CollectionService:GetTagged("LadderTop")
+    
+    local closestLadder = nil
+    local closestDist = math.huge
+    
+    for _, ladderTop in pairs(ladderTops) do
+        local ladder = ladderTop.Parent
+        
+        if ladder and ladder.Parent == structures then
+            local dist = (elfPos - ladderTop.Position).Magnitude
+            if dist < closestDist then
+                closestDist = dist
+                closestLadder = ladder
+            end
+        end
+    end
+    
+    
+    if closestDist < 15 then
+        return closestLadder
+    end
+    
+    
+    for _, structure in pairs(structures:GetChildren()) do
+        if structure.Name == "Ladder" or structure.Name:find("Ladder") then
+            local ladderPos = structure.PrimaryPart and structure.PrimaryPart.Position or structure:GetPivot().Position
+            local dist = (ladderPos - elfPos).Magnitude
+            if dist < 20 then
+                return structure
+            end
+        end
+    end
+    
+    return nil
+end
+
+local function getSnowShovelFromInventory()
+    local inventory = LocalPlayer:FindFirstChild("Inventory")
+    if not inventory then return nil end
+    
+    
+    local exactMatch = inventory:FindFirstChild("Snow Shovel")
+    if exactMatch then return exactMatch end
+    
+    
+    for _, item in pairs(inventory:GetChildren()) do
+        local name = item.Name:lower()
+        if name:find("shovel") then
+            return item
+        end
+    end
+    
+    return nil
+end
+
+local function digSnowBlock(snowBlock, shovel)
+    if not snowBlock or not shovel or not Remotes.SnowShovelDig then return false end
+    
+    local blockPos
+    if snowBlock:IsA("BasePart") then
+        blockPos = snowBlock.Position
+    elseif snowBlock:IsA("Model") then
+        blockPos = snowBlock.PrimaryPart and snowBlock.PrimaryPart.Position or snowBlock:GetPivot().Position
+    else
+        return false
+    end
+    
+    local success = pcall(function()
+        Remotes.SnowShovelDig:InvokeServer(shovel, blockPos)
+    end)
+    
+    return success
+end
+
+local function getAllSnowBlocks(destructibleSnow)
+    local blocks = {}
+    
+    local function scanForBlocks(parent)
+        for _, child in pairs(parent:GetChildren()) do
+            if child.Name == "SnowBlock" or child.Name:find("SnowBlock") then
+                if child:IsA("BasePart") or child:IsA("Model") then
+                    table.insert(blocks, child)
+                end
+            end
+            
+            if #child:GetChildren() > 0 then
+                scanForBlocks(child)
+            end
+        end
+    end
+    
+    scanForBlocks(destructibleSnow)
+    return blocks
+end
+
+local function helpSnowElf(snowElfData)
+    if not snowElfData or not snowElfData.destructibleSnow then return false end
+    
+    
+    local shovel = getSnowShovelFromInventory()
+    if not shovel then
+        buySnowShovel()
+        task.wait(0.5)
+        shovel = getSnowShovelFromInventory()
+        if not shovel then return false end
+    end
+    
+    
+    if Remotes.EquipItem then
+        pcall(function()
+            Remotes.EquipItem:FireServer("FireAllClients", shovel)
+        end)
+    end
+    task.wait(0.3)
+    
+    
+    shovel = getSnowShovelFromInventory()
+    if not shovel then return false end
+    
+    local hrp = getHRP()
+    if not hrp then return false end
+    
+    
+    local snowBlocks = getAllSnowBlocks(snowElfData.destructibleSnow)
+    
+    for _, block in ipairs(snowBlocks) do
+        if not Config.IsRunning or Config.Phase ~= "ElfRescue" then break end
+        
+        local blockPos
+        if block:IsA("BasePart") then
+            blockPos = block.Position
+        elseif block:IsA("Model") then
+            blockPos = block.PrimaryPart and block.PrimaryPart.Position or block:GetPivot().Position
+        end
+        
+        if blockPos then
+            
+            hrp.CFrame = CFrame.new(blockPos + Vector3.new(0, 2, 2))
+            task.wait(0.2)
+            
+            
+            digSnowBlock(block, shovel)
+            task.wait(0.3)
+        end
+    end
+    
+    Config.ElvesRescued = Config.ElvesRescued + 1
+    return true
+end
+
+local function runElfRescue()
+    
+    print("[DEBUG] Waiting for RealDayCounter = 2...")
+    while Config.IsRunning and Config.Phase == "ElfRescue" do
+        local dayCounter = Services.Workspace:GetAttribute("RealDayCounter")
+        if dayCounter and dayCounter >= 2 then
+            print("[DEBUG] RealDayCounter =", dayCounter, "- Starting elf rescue!")
+            break
+        end
+        print("[DEBUG] RealDayCounter =", dayCounter or "nil", "- Waiting...")
+        task.wait(1)
+    end
+    
+    if not Config.IsRunning or Config.Phase ~= "ElfRescue" then return end
+    
+    local stuckElves, fallenElves, snowElves, iceRaceElves = findElvesNeedingHelp()
+    
+    
+    if #stuckElves > 0 then
+        for i = 1, math.min(Config.LaddersToBuy, #stuckElves) do
+            if not Config.IsRunning or Config.Phase ~= "ElfRescue" then break end
+            buyLadder()
+            task.wait(0.5)
+        end
+    end
+    
+    if #fallenElves > 0 then
+        buyIceSkates()
+        task.wait(0.5)
+    end
+    
+    if #snowElves > 0 then
+        buySnowShovel()
+        task.wait(0.5)
+    end
+    
+    task.wait(1)
+    
+    local rescuedElvesSet = {}
+    local rescuedSnowElvesSet = {}
+    local rescuedIceRaceSet = {}
+    
+    while Config.IsRunning and Config.Phase == "ElfRescue" do
+        stuckElves, fallenElves, snowElves, iceRaceElves = findElvesNeedingHelp()
+        
+        
+        local unrescuedStuck = {}
+        for _, elf in ipairs(stuckElves) do
+            if not rescuedElvesSet[elf] then
+                table.insert(unrescuedStuck, elf)
+            end
+        end
+        
+        local unrescuedFallen = {}
+        for _, elf in ipairs(fallenElves) do
+            if not rescuedElvesSet[elf] then
+                table.insert(unrescuedFallen, elf)
+            end
+        end
+        
+        local unrescuedSnow = {}
+        for _, snowElfData in ipairs(snowElves) do
+            if not rescuedSnowElvesSet[snowElfData.landmark] then
+                table.insert(unrescuedSnow, snowElfData)
+            end
+        end
+        
+        local unrescuedIceRace = {}
+        for _, iceRaceData in ipairs(iceRaceElves) do
+            if not rescuedIceRaceSet[iceRaceData.landmark] then
+                table.insert(unrescuedIceRace, iceRaceData)
+            end
+        end
+        
+        
+        if #unrescuedStuck == 0 and #unrescuedFallen == 0 and #unrescuedSnow == 0 and #unrescuedIceRace == 0 then
+            print("[DEBUG] No elves need help, going to Complete")
+            Config.Phase = "Complete"
+            break
+        end
+        
+        local hrp = getHRP()
+        if not hrp then
+            task.wait(0.5)
+            continue
+        end
+        
+        
+        print("[DEBUG] unrescuedIceRace count:", #unrescuedIceRace)
+        if #unrescuedIceRace > 0 then
+            local iceRaceData = unrescuedIceRace[1]
+            print("[DEBUG] Attempting to rescue Ice Race elf:", iceRaceData.landmark.Name)
+            
+            local result = helpIceRaceElf(iceRaceData)
+            print("[DEBUG] helpIceRaceElf returned:", result)
+            rescuedIceRaceSet[iceRaceData.landmark] = true
+            task.wait(0.5)
+            continue
+        end
+        
+        
+        if #unrescuedSnow > 0 then
+            local snowElfData = unrescuedSnow[1]
+            
+            helpSnowElf(snowElfData)
+            rescuedSnowElvesSet[snowElfData.landmark] = true
+            task.wait(1)
+            continue
+        end
+        
+        
+        if #unrescuedFallen > 0 then
+            local elf = unrescuedFallen[1]
+            
+            local elfPos
+            if elf:IsA("Model") then
+                elfPos = elf.PrimaryPart and elf.PrimaryPart.Position or elf:GetPivot().Position
+            elseif elf:IsA("BasePart") then
+                elfPos = elf.Position
+            else
+                elfPos = elf:GetPivot().Position
+            end
+            
+            
+            hrp.CFrame = CFrame.new(elfPos + Vector3.new(0, 2, 3))
+            task.wait(0.5)
+            
+            
+            helpFallenElf(elf)
+            rescuedElvesSet[elf] = true
+            task.wait(1)
+            continue
+        end
+        
+        
+        if #unrescuedStuck > 0 then
+            local ladderBlueprint = getLadderBlueprintFromInventory()
+            
+            if not ladderBlueprint then
+                buyLadder()
+                task.wait(1)
+                ladderBlueprint = getLadderBlueprintFromInventory()
+                
+                if not ladderBlueprint then
+                    
+                    for _, elf in ipairs(unrescuedStuck) do
+                        rescuedElvesSet[elf] = true
+                    end
+                    continue
+                end
+            end
+            
+            local elf = unrescuedStuck[1]
+            
+            placeLadderNearElf(elf, ladderBlueprint)
+            task.wait(1)
+            
+            
+            local elfPos
+            if elf:IsA("Model") then
+                elfPos = elf.PrimaryPart and elf.PrimaryPart.Position or elf:GetPivot().Position
+            elseif elf:IsA("BasePart") then
+                elfPos = elf.Position
+            else
+                elfPos = elf:GetPivot().Position
+            end
+            
+            
+            local placedLadder = findPlacedLadderNearElf(elfPos)
+            
+            if placedLadder then
+                helpElfWithLadder(elf, placedLadder)
+                rescuedElvesSet[elf] = true
+                task.wait(1.5)
+            else
+                
+                local structures = Services.Workspace:FindFirstChild("Structures")
+                if structures then
+                    local anyLadder = structures:FindFirstChild("Ladder")
+                    if anyLadder then
+                        helpElfWithLadder(elf, anyLadder)
+                        rescuedElvesSet[elf] = true
+                        task.wait(1.5)
+                    else
+                        rescuedElvesSet[elf] = true
+                    end
+                else
+                    rescuedElvesSet[elf] = true
+                end
+            end
+        end
+        
+        task.wait(0.5)
+    end
+end
+
+
+
+
+
+local function getChristmasLightsInInventory()
+    local inventory = LocalPlayer:FindFirstChild("Inventory")
+    if not inventory then return 0 end
+    
+    local count = 0
+    for _, item in pairs(inventory:GetChildren()) do
+        if item.Name == "Christmas Lights" or item.Name:lower():find("christmas lights") then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function getEquippedTool()
+    local char = getCharacter()
+    if not char then return nil end
+    for _, child in pairs(char:GetChildren()) do
+        if child:IsA("Tool") then return child end
+    end
+    return nil
+end
+
+local function equipBestAxe()
+    local player = LocalPlayer
+    local inventory = player:FindFirstChild("Inventory")
+    if not inventory then return nil end
+    
+    
+    local axeHierarchy = {
+        "Chainsaw",     
+        "Strong Axe",   
+        "Ice Axe",      
+        "Good Axe",     
+        "Old Axe"       
+    }
+    
+    
+    local axeToUse = nil
+    for _, axeName in ipairs(axeHierarchy) do
+        local axe = inventory:FindFirstChild(axeName)
+        if axe then
+            axeToUse = axe
+            break
+        end
+    end
+    
+    if not axeToUse then return nil end
+    
+    
+    if Remotes.EquipItem then
+        local success = pcall(function()
+            Remotes.EquipItem:FireServer("FireAllClients", axeToUse)
+        end)
+        
+        if success then
+            task.wait(0.3)
+            return getEquippedTool() or axeToUse
+        end
+    end
+    
+    return nil
+end
+
+local function findChristmasLightTrees()
+    local trees = {}
+    local map = Services.Workspace:FindFirstChild("Map")
+    if not map then return trees end
+    
+    local foliage = map:FindFirstChild("Foliage")
+    if not foliage then return trees end
+    
+    for _, tree in pairs(foliage:GetChildren()) do
+        if tree:IsA("Model") and tree:FindFirstChild("ChristmasLights") then
+            local health = tree:GetAttribute("Health") or 0
+            if health > 0 then
+                table.insert(trees, tree)
+            end
+        end
+    end
+    
+    return trees
+end
+
+local function chopTreeWithAura(tree, tool)
+    if not tree or not tool or not Remotes.ToolDamage then return false end
+    
+    local hrp = getHRP()
+    if not hrp then return false end
+    
+    local success = pcall(function()
+        Remotes.ToolDamage:InvokeServer(tree, tool, Config.TreeDamageId, hrp.CFrame)
+    end)
+    
+    return success
+end
+
+local function runTreeCutting()
+    
+    local lightsInInventory = getChristmasLightsInInventory()
+    if lightsInInventory >= Config.TargetLightsCount then
+        Config.Phase = "Decorating"
+        return
+    end
+    
+    
+    local tool = equipBestAxe()
+    if not tool then
+        
+        Config.Phase = "Complete"
+        return
+    end
+    
+    local lastChopTime = 0
+    
+    while Config.IsRunning and Config.Phase == "TreeCutting" do
+        
+        lightsInInventory = getChristmasLightsInInventory()
+        if lightsInInventory >= Config.TargetLightsCount then
+            Config.Phase = "Decorating"
+            break
+        end
+        
+        local currentTime = tick()
+        
+        
+        if currentTime - lastChopTime < Config.ChoppingCooldown then
+            task.wait(0.05)
+            continue
+        end
+        
+        
+        local trees = findChristmasLightTrees()
+        
+        if #trees == 0 then
+            
+            Config.Phase = "Complete"
+            break
+        end
+        
+        
+        local inventory = LocalPlayer:FindFirstChild("Inventory")
+        local hasAxe = false
+        if inventory then
+            for _, axeName in ipairs({"Chainsaw", "Strong Axe", "Ice Axe", "Good Axe", "Old Axe"}) do
+                if inventory:FindFirstChild(axeName) then
+                    hasAxe = true
+                    tool = inventory:FindFirstChild(axeName)
+                    break
+                end
+            end
+        end
+        
+        if not hasAxe then
+            Config.Phase = "Complete"
+            break
+        end
+        
+        
+        if Remotes.EquipItem then
+            pcall(function()
+                Remotes.EquipItem:FireServer("FireAllClients", tool)
+            end)
+        end
+        task.wait(0.05)
+        
+        
+        local char = getCharacter()
+        local equippedTool = char and char:FindFirstChildOfClass("Tool")
+        if not equippedTool then
+            equippedTool = tool 
+        end
+        
+        local hrp = getHRP()
+        if not hrp then
+            task.wait(0.5)
+            continue
+        end
+        
+        local playerPos = hrp.Position
+        
+        
+        table.sort(trees, function(a, b)
+            local posA = a.PrimaryPart and a.PrimaryPart.Position or a:GetPivot().Position
+            local posB = b.PrimaryPart and b.PrimaryPart.Position or b:GetPivot().Position
+            return (posA - playerPos).Magnitude < (posB - playerPos).Magnitude
+        end)
+        
+        
+        local choppedCount = 0
+        for i, tree in ipairs(trees) do
+            if i > Config.DamageBatchSize then break end
+            
+            local treePos = tree.PrimaryPart and tree.PrimaryPart.Position or tree:GetPivot().Position
+            local distance = (treePos - playerPos).Magnitude
+            
+            if distance <= Config.ChoppingRange then
+                if chopTreeWithAura(tree, equippedTool) then
+                    choppedCount = choppedCount + 1
+                    Config.TreesChopped = Config.TreesChopped + 1
+                end
+            end
+        end
+        
+        
+        if choppedCount == 0 and #trees > 0 then
+            local nearestTree = trees[1]
+            local treePos = nearestTree.PrimaryPart and nearestTree.PrimaryPart.Position or nearestTree:GetPivot().Position
+            hrp.CFrame = CFrame.new(treePos + Vector3.new(0, 5, 0))
+            task.wait(0.2)
+        end
+        
+        lastChopTime = tick()
+        task.wait(Config.ChoppingCooldown)
+    end
+end
+
+
+
+
+
+local function findLitChristmasPines()
+    local trees = {}
+    local landmarks = Services.Workspace.Map and Services.Workspace.Map:FindFirstChild("Landmarks")
+    if not landmarks then return trees end
+    
+    for _, child in pairs(landmarks:GetChildren()) do
+        
+        if child.Name == "Lit Christmas Pine" or child.Name:find("Lit Christmas Pine") then
+            table.insert(trees, child)
+        end
+    end
+    
+    return trees
+end
+
+local function getChristmasLightsFromInventory()
+    local lights = {}
+    local inventory = LocalPlayer:FindFirstChild("Inventory")
+    if not inventory then return lights end
+    
+    for _, item in pairs(inventory:GetChildren()) do
+        if item.Name == "Christmas Lights" or item.Name:lower():find("christmas lights") then
+            table.insert(lights, item)
+        end
+    end
+    
+    return lights
+end
+
+local function decorateTree(tree, light)
+    if not tree or not light or not Remotes.ChristmasDecorate then return false end
+    
+    local success = pcall(function()
+        Remotes.ChristmasDecorate:InvokeServer(tree, light)
+    end)
+    
+    if success then
+        Config.TreesDecorated = Config.TreesDecorated + 1
+    end
+    
+    return success
+end
+
+local function runTreeDecorating()
+    
+    local trees = findLitChristmasPines()
+    
+    if #trees == 0 then
+        
+        Config.Phase = "FactoryClear"
+        return
+    end
+    
+    
+    local decoratedTreesSet = {}
+    
+    while Config.IsRunning and Config.Phase == "Decorating" do
+        
+        local lights = getChristmasLightsFromInventory()
+        
+        if #lights == 0 then
+            
+            Config.Phase = "FactoryClear"
+            break
+        end
+        
+        
+        trees = findLitChristmasPines()
+        
+        
+        local undecoratedTrees = {}
+        for _, tree in ipairs(trees) do
+            if not decoratedTreesSet[tree] then
+                table.insert(undecoratedTrees, tree)
+            end
+        end
+        
+        if #undecoratedTrees == 0 then
+            
+            Config.Phase = "FactoryClear"
+            break
+        end
+        
+        
+        local hrp = getHRP()
+        if hrp and #undecoratedTrees > 0 and #lights > 0 then
+            local tree = undecoratedTrees[1]
+            local light = lights[1]
+            
+            
+            local treePos
+            if tree:IsA("Model") then
+                treePos = tree.PrimaryPart and tree.PrimaryPart.Position or tree:GetPivot().Position
+            elseif tree:IsA("BasePart") then
+                treePos = tree.Position
+            end
+            
+            if treePos then
+                
+                hrp.CFrame = CFrame.new(treePos + Vector3.new(0, 5, 0))
+                task.wait(0.3)
+                
+                
+                if decorateTree(tree, light) then
+                    
+                    decoratedTreesSet[tree] = true
+                end
+                task.wait(0.5)
+            end
+        end
+        
+        
+        if Config.TreesDecorated >= Config.TargetTreesCount then
+            Config.Phase = "FactoryClear"
+            break
+        end
+        
+        task.wait(0.5)
+    end
+end
+
+
+
+
+
+
+
+local function findFactoryTargets()
+    local targets = {}
+    local landmarks = Services.Workspace.Map and Services.Workspace.Map:FindFirstChild("Landmarks")
+    
+    
+    if landmarks then
+        local workshopFoundations = landmarks:FindFirstChild("Workshop Foundations")
+        if workshopFoundations then
+            local functional = workshopFoundations:FindFirstChild("Functional")
+            if functional then
+                for _, child in ipairs(functional:GetChildren()) do
+                    if child.Name == "Candy Turret" then
+                        local isDead = child:GetAttribute("Dead")
+                        if not isDead then
+                            local health = child:GetAttribute("Health") or 0
+                            if health > 0 then
+                                table.insert(targets, {
+                                    entity = child,
+                                    type = "Turret",
+                                    health = health
+                                })
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    
+    for _, child in ipairs(Services.Workspace:GetChildren()) do
+        if child.Name == "Candy Turret" then
+            local isDead = child:GetAttribute("Dead")
+            if not isDead then
+                local health = child:GetAttribute("Health") or 0
+                if health > 0 then
+                    table.insert(targets, {
+                        entity = child,
+                        type = "Turret",
+                        health = health
+                    })
+                end
+            end
+        end
+    end
+    
+    
+    local characters = Services.Workspace:FindFirstChild("Characters")
+    if characters then
+        local santa = characters:FindFirstChild("Impostor Santa")
+        if santa then
+            local humanoid = santa:FindFirstChildOfClass("Humanoid")
+            if humanoid and humanoid.Health > 0 then
+                table.insert(targets, {
+                    entity = santa,
+                    type = "Santa",
+                    health = humanoid.Health
+                })
+            end
+        end
+    end
+    
+    return targets
+end
+
+local function getCenterPosition(targets)
+    if #targets == 0 then return nil end
+    
+    local totalPos = Vector3.zero
+    local count = 0
+    
+    for _, targetData in ipairs(targets) do
+        local entity = targetData.entity
+        local pos = nil
+        
+        if entity:IsA("Model") then
+            pos = entity.PrimaryPart and entity.PrimaryPart.Position or entity:GetPivot().Position
+        elseif entity:IsA("BasePart") then
+            pos = entity.Position
+        end
+        
+        if pos then
+            totalPos = totalPos + pos
+            count = count + 1
+        end
+    end
+    
+    if count > 0 then
+        return totalPos / count
+    end
+    return nil
+end
+
+local function getTargetPart(entity)
+    if not entity then return nil end
+    
+    if entity.Name == "Impostor Santa" then
+        
+        if entity.PrimaryPart then
+            return entity.PrimaryPart
+        end
+        return entity:FindFirstChild("HumanoidRootPart") or 
+               entity:FindFirstChild("Torso") or 
+               entity:FindFirstChild("Head") or
+               entity:FindFirstChildWhichIsA("BasePart")
+    else
+        
+        if entity:IsA("Model") then
+            return entity.PrimaryPart or entity:FindFirstChildWhichIsA("BasePart")
+        elseif entity:IsA("BasePart") then
+            return entity
+        end
+    end
+    
+    return nil
+end
+
+local function factoryUltraKillAura(targets, tool)
+    if #targets == 0 or not tool then return end
+    
+    local hrp = getHRP()
+    if not hrp then return end
+    
+    local toolDamageRemote = Remotes.ToolDamage
+    if not toolDamageRemote then return end
+    
+    
+    local batchSize = Config.FactoryDamageBatchSize
+    local index = 1
+    
+    while index <= #targets do
+        for offset = 0, batchSize - 1 do
+            local targetData = targets[index + offset]
+            if not targetData then break end
+            
+            local entity = targetData.entity
+            local targetPart = getTargetPart(entity)
+            
+            if targetPart then
+                task.spawn(function()
+                    pcall(function()
+                        toolDamageRemote:InvokeServer(entity, tool, Config.FactoryDamageId, hrp.CFrame)
+                    end)
+                end)
+            end
+        end
+        
+        index = index + batchSize
+        if index <= #targets then
+            task.wait(0.025)
+        end
+    end
+end
+
+local function runFactoryClear()
+    print("[DEBUG] Starting FactoryClear phase")
+    
+    
+    Config.TurretsDestroyed = 0
+    Config.SantaKilled = false
+    
+    
+    local tool = equipBestAxe()
+    if not tool then
+        print("[DEBUG] No axe found, skipping FactoryClear")
+        Config.Phase = "ElfRescue"
+        return
+    end
+    
+    local lastAttackTime = 0
+    local maxIterations = 100 
+    local iterations = 0
+    
+    while Config.IsRunning and Config.Phase == "FactoryClear" and iterations < maxIterations do
+        iterations = iterations + 1
+        
+        local currentTime = tick()
+        if currentTime - lastAttackTime < Config.FactoryAttackCooldown then
+            task.wait(0.05)
+            continue
+        end
+        
+        
+        local targets = findFactoryTargets()
+        print("[DEBUG] Factory targets found:", #targets)
+        
+        if #targets == 0 then
+            print("[DEBUG] All factory targets cleared!")
+            Config.Phase = "ElfRescue"
+            break
+        end
+        
+        local hrp = getHRP()
+        if not hrp then
+            task.wait(0.5)
+            continue
+        end
+        
+        
+        local centerPos = getCenterPosition(targets)
+        if centerPos then
+            hrp.CFrame = CFrame.new(centerPos + Vector3.new(0, 5, 0))
+        end
+        task.wait(0.1)
+        
+        
+        local inventory = LocalPlayer:FindFirstChild("Inventory")
+        if inventory then
+            for _, axeName in ipairs({"Chainsaw", "Strong Axe", "Ice Axe", "Good Axe", "Old Axe"}) do
+                local axe = inventory:FindFirstChild(axeName)
+                if axe then
+                    tool = axe
+                    break
+                end
+            end
+        end
+        
+        
+        if Remotes.EquipItem then
+            pcall(function()
+                Remotes.EquipItem:FireServer("FireAllClients", tool)
+            end)
+        end
+        task.wait(0.05)
+        
+        
+        factoryUltraKillAura(targets, tool)
+        
+        lastAttackTime = tick()
+        task.wait(Config.FactoryAttackCooldown)
+    end
+    
+    print("[DEBUG] FactoryClear phase complete")
+end
+
+
+
+
+local function startSystem()
+    if Config.IsRunning then return end
+    
+    Config.IsRunning = true
+    Config.Phase = "Discovery"
+    Config.StartFireLevel = getFireLevel()
+    Config.CurrentFireLevel = Config.StartFireLevel
+    Config.ItemsRefilled = 0
+    Config.CoinsCollected = 0
+    Config.TreesChopped = 0
+    Config.LightsCollected = 0
+    Config.TreesDecorated = 0
+    Config.LaddersBought = 0
+    Config.ElvesRescued = 0
+    Config.TeleportedItems = {}
+    Config.LastGodModeTime = 0
+    
+    
+    enableFly()
+    
+    
+    Config.GodModeThread = task.spawn(runGodMode)
+    
+    
+    Config.LightsThread = task.spawn(runLightsCollection)
+    
+    
+    Config.MainThread = task.spawn(function()
+        while Config.IsRunning do
+            if Config.Phase == "Discovery" then
+                
+                Config.SpiralThread = task.spawn(runSpiralDiscovery)
+                Config.RefillThread = task.spawn(runRefillSystem)
+                
+                
+                while Config.Phase == "Discovery" and Config.IsRunning do
+                    task.wait(0.5)
+                end
+                
+                
+                if Config.SpiralThread then
+                    task.cancel(Config.SpiralThread)
+                    Config.SpiralThread = nil
+                end
+                if Config.RefillThread then
+                    task.cancel(Config.RefillThread)
+                    Config.RefillThread = nil
+                end
+                
+            elseif Config.Phase == "CoinCollection" then
+                runCoinCollection()
+                
+            elseif Config.Phase == "TreeCutting" then
+                runTreeCutting()
+                
+            elseif Config.Phase == "Decorating" then
+                runTreeDecorating()
+                
+            elseif Config.Phase == "FactoryClear" then
+                runFactoryClear()
+                
+            elseif Config.Phase == "ElfRescue" then
+                runElfRescue()
+                
+            elseif Config.Phase == "Complete" then
+                -- Auto-Replay Logic
+                if Remotes.AcceptPlayAgain then
+                    print("[DEBUG] Game Complete! Restarting...")
+                    
+                    -- Queue the script for the next server
+                    if queue_on_teleport then
+                        queue_on_teleport([[
+                            task.wait(5)
+                            print("Auto-Re-executing Script...")
+                            -- loadstring(game:HttpGet("YOUR_RAW_SCRIPT_URL_HERE"))()
+                        ]])
+                    end
+                    
+                    -- Reset Character first
+                    local char = LocalPlayer.Character
+                    if char then
+                        local hum = char:FindFirstChildOfClass("Humanoid")
+                        if hum then
+                            hum.Health = 0
+                        end
+                    end
+                    
+                    -- Wait 3 seconds then fire replay
+                    task.wait(3)
+                    Remotes.AcceptPlayAgain:FireServer()
+                end
+                
+                break
+            end
+            
+            task.wait(0.1)
+        end
+        
+        
+        disableFly()
+        teleportToCampfire()
+        Config.IsRunning = false
+    end)
+end
+
+local function stopSystem()
+    Config.IsRunning = false
+    Config.Phase = "Idle"
+    
+    
+    if Config.MainThread then
+        pcall(function() task.cancel(Config.MainThread) end)
+        Config.MainThread = nil
+    end
+    if Config.SpiralThread then
+        pcall(function() task.cancel(Config.SpiralThread) end)
+        Config.SpiralThread = nil
+    end
+    if Config.RefillThread then
+        pcall(function() task.cancel(Config.RefillThread) end)
+        Config.RefillThread = nil
+    end
+    if Config.GodModeThread then
+        pcall(function() task.cancel(Config.GodModeThread) end)
+        Config.GodModeThread = nil
+    end
+    if Config.LightsThread then
+        pcall(function() task.cancel(Config.LightsThread) end)
+        Config.LightsThread = nil
+    end
+    
+    disableFly()
+    teleportToCampfire()
+end
+
+local function CreateUI()
+    
+    for _, x in pairs(Services.CoreGui:GetChildren()) do
+        if x.Name == "99NightsHelperUI" or x.Name == "FireLevel6GUI" then x:Destroy() end
+    end
+    
+    local PhaseDisplayNames = {
+        Discovery = "Discovering & Refilling",
+        CoinCollection = "Collecting Coins",
+        TreeCutting = "Cutting Christmas Trees",
+        Decorating = "Decorating Trees",
+        FactoryClear = "Clearing Factory",
+        ElfRescue = "Rescuing Elves",
+        Complete = "Complete!",
+        Idle = "Waiting to start..."
+    }
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "99NightsHelperUI"
+    ScreenGui.Parent = Services.CoreGui
+
+    local Frame = Instance.new("Frame")
+    Frame.Name = "MainFrame"
+    Frame.Size = UDim2.new(0, 320, 0, 480)
+    Frame.Position = UDim2.new(0.5, -160, 0.2, 0)
+    Frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+    Frame.BorderSizePixel = 0
+    Frame.Parent = ScreenGui
+    Frame.Active = true
+    Frame.Draggable = true
+    
+    local UIStroke = Instance.new("UIStroke")
+    UIStroke.Color = Color3.fromRGB(110, 0, 210)
+    UIStroke.Thickness = 2
+    UIStroke.Parent = Frame
+    
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 15)
+    Corner.Parent = Frame
+    
+    local Title = Instance.new("TextLabel")
+    Title.Name = "Title"
+    Title.Size = UDim2.new(1, 0, 0, 40)
+    Title.Position = UDim2.new(0, 0, 0, 5)
+    Title.BackgroundTransparency = 1
+    Title.Text = "99Nights CandyFarm"
+    Title.TextColor3 = Color3.fromRGB(150, 50, 220)
+    Title.Font = Enum.Font.GothamBold
+    Title.TextSize = 22
+    Title.Parent = Frame
+    
+    local StatusFrame = Instance.new("Frame")
+    StatusFrame.Name = "StatusFrame"
+    StatusFrame.Size = UDim2.new(1, -30, 0, 60)
+    StatusFrame.Position = UDim2.new(0, 15, 0, 50)
+    StatusFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+    StatusFrame.Parent = Frame
+    
+    local StatusCorner = Instance.new("UICorner")
+    StatusCorner.CornerRadius = UDim.new(0, 8)
+    StatusCorner.Parent = StatusFrame
+    
+    local StatusTitle = Instance.new("TextLabel")
+    StatusTitle.Size = UDim2.new(1, 0, 0, 20)
+    StatusTitle.Position = UDim2.new(0, 0, 0, 8)
+    StatusTitle.BackgroundTransparency = 1
+    StatusTitle.Text = "CURRENT STATUS"
+    StatusTitle.TextColor3 = Color3.fromRGB(100, 100, 100)
+    StatusTitle.Font = Enum.Font.GothamBold
+    StatusTitle.TextSize = 10
+    StatusTitle.Parent = StatusFrame
+    
+    local StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Name = "StatusLabel"
+    StatusLabel.Size = UDim2.new(1, 0, 0, 25)
+    StatusLabel.Position = UDim2.new(0, 0, 0, 25)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Text = PhaseDisplayNames["Idle"]
+    StatusLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.TextSize = 16
+    StatusLabel.Parent = StatusFrame
+    
+    local CandyFrame = Instance.new("Frame")
+    CandyFrame.Name = "CandyFrame"
+    CandyFrame.Size = UDim2.new(1, -30, 0, 35)
+    CandyFrame.Position = UDim2.new(0, 15, 0, 120)
+    CandyFrame.BackgroundColor3 = Color3.fromRGB(40, 20, 40)
+    CandyFrame.Parent = Frame
+    
+    local CandyCorner = Instance.new("UICorner")
+    CandyCorner.CornerRadius = UDim.new(0, 8)
+    CandyCorner.Parent = CandyFrame
+    
+    local CandyLabel = Instance.new("TextLabel")
+    CandyLabel.Size = UDim2.new(1, -20, 1, 0)
+    CandyLabel.Position = UDim2.new(0, 10, 0, 0)
+    CandyLabel.BackgroundTransparency = 1
+    CandyLabel.Text = "Candy Count - 0"
+    CandyLabel.TextColor3 = Color3.fromRGB(255, 100, 255)
+    CandyLabel.Font = Enum.Font.GothamBold
+    CandyLabel.TextSize = 14
+    CandyLabel.TextXAlignment = Enum.TextXAlignment.Left
+    CandyLabel.Parent = CandyFrame
+    
+    local StatsContainer = Instance.new("Frame")
+    StatsContainer.Name = "StatsContainer"
+    StatsContainer.Size = UDim2.new(1, -40, 0, 180)
+    StatsContainer.Position = UDim2.new(0, 20, 0, 165)
+    StatsContainer.BackgroundTransparency = 1
+    StatsContainer.Parent = Frame
+    
+    local function createStatLabel(name, order)
+        local label = Instance.new("TextLabel")
+        label.Name = name
+        label.Size = UDim2.new(1, 0, 0, 20)
+        label.Position = UDim2.new(0, 0, 0, (order - 1) * 22)
+        label.BackgroundTransparency = 1
+        label.Text = ""
+        label.TextColor3 = Color3.fromRGB(180, 180, 180)
+        label.Font = Enum.Font.Gotham
+        label.TextSize = 13
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = StatsContainer
+        return label
+    end
+    
+    local LevelLabel = createStatLabel("Level", 1)
+    local ItemsLabel = createStatLabel("Items", 2)
+    local CoinsLabel = createStatLabel("Coins", 3)
+    local TreesLabel = createStatLabel("Trees", 4)
+    local LightsLabel = createStatLabel("Lights", 5)
+    local DecoratedLabel = createStatLabel("Decorated", 6)
+    local GodModeLabel = createStatLabel("GodMode", 7)
+    
+    local DiscordText = Instance.new("TextLabel")
+    DiscordText.Size = UDim2.new(1, 0, 0, 20)
+    DiscordText.Position = UDim2.new(0, 0, 0, 360)
+    DiscordText.BackgroundTransparency = 1
+    DiscordText.Text = "Report Bugs on our Discord!"
+    DiscordText.TextColor3 = Color3.fromRGB(255, 255, 255)
+    DiscordText.Font = Enum.Font.GothamBold
+    DiscordText.TextSize = 12
+    DiscordText.Parent = Frame
+    
+    local ButtonsContainer = Instance.new("Frame")
+    ButtonsContainer.Size = UDim2.new(1, -30, 0, 45)
+    ButtonsContainer.Position = UDim2.new(0, 15, 0, 385)
+    ButtonsContainer.BackgroundTransparency = 1
+    ButtonsContainer.Parent = Frame
+    
+    local DiscordButton = Instance.new("TextButton")
+    DiscordButton.Size = UDim2.new(0.48, 0, 1, 0)
+    DiscordButton.Position = UDim2.new(0, 0, 0, 0)
+    DiscordButton.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
+    DiscordButton.Text = "Discord"
+    DiscordButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    DiscordButton.Font = Enum.Font.GothamBold
+    DiscordButton.TextSize = 14
+    DiscordButton.Parent = ButtonsContainer
+    
+    local DiscordCorner = Instance.new("UICorner")
+    DiscordCorner.CornerRadius = UDim.new(0, 8)
+    DiscordCorner.Parent = DiscordButton
+    
+    local StartButton = Instance.new("TextButton")
+    StartButton.Size = UDim2.new(0.48, 0, 1, 0)
+    StartButton.Position = UDim2.new(0.52, 0, 0, 0)
+    StartButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+    StartButton.Text = "Start System"
+    StartButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StartButton.Font = Enum.Font.GothamBold
+    StartButton.TextSize = 14
+    StartButton.Parent = ButtonsContainer
+    
+    local StartCorner = Instance.new("UICorner")
+    StartCorner.CornerRadius = UDim.new(0, 8)
+    StartCorner.Parent = StartButton
+    
+    DiscordButton.MouseButton1Click:Connect(function()
+        local link = "https://discord.gg/FcF8ghneh4"
+        if setclipboard then
+            setclipboard(link)
+            DiscordButton.Text = "Copied to Clipboard"
+            task.delay(2, function()
+                if DiscordButton then DiscordButton.Text = "Discord" end
+            end)
+        else
+            DiscordButton.Text = "No Clipboard Support"
+            task.delay(2, function()
+                 if DiscordButton then DiscordButton.Text = "Discord" end
+            end)
+        end
+    end)
+    
+    StartButton.MouseButton1Click:Connect(function()
+        if Config.IsRunning then
+            stopSystem()
+            StartButton.Text = "Start System"
+            StartButton.BackgroundColor3 = Color3.fromRGB(46, 204, 113)
+        else
+            startSystem()
+            StartButton.Text = "Stop System"
+            StartButton.BackgroundColor3 = Color3.fromRGB(231, 76, 60)
+        end
+    end)
+    
+    task.spawn(function()
+        while ScreenGui.Parent do
+            local phaseName = Config.Phase
+            local display = PhaseDisplayNames[phaseName] or phaseName
+            StatusLabel.Text = display
+            
+            LevelLabel.Text = "Fire Level: " .. getFireLevel() .. " / 6"
+            ItemsLabel.Text = "Items Refilled: " .. Config.ItemsRefilled
+            CoinsLabel.Text = "Coins Collected: " .. Config.CoinsCollected
+            TreesLabel.Text = "Trees Chopped: " .. Config.TreesChopped
+            
+            local lightsInInventory = 0
+            local inventory = LocalPlayer:FindFirstChild("Inventory")
+            if inventory then
+                for _, item in pairs(inventory:GetChildren()) do
+                    if item.Name == "Christmas Lights" or item.Name:lower():find("christmas lights") then
+                        lightsInInventory = lightsInInventory + 1
+                    end
+                end
+            end
+            
+            LightsLabel.Text = "Lights: " .. lightsInInventory .. " / 12 (Total: " .. Config.LightsCollected .. ")"
+            DecoratedLabel.Text = "Decorated: " .. Config.TreesDecorated .. " / 12"
+            
+            if Config.IsRunning then
+                GodModeLabel.Text = "God Mode: ON"
+            else
+                GodModeLabel.Text = "God Mode: OFF"
+            end
+            
+            local candyText = "0"
+            local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+            if playerGui then
+                local interface = playerGui:FindFirstChild("Interface")
+                if interface then
+                    local candyCount = interface:FindFirstChild("CandyCaneCount")
+                    if candyCount then
+                        local countLabel = candyCount:FindFirstChild("Count")
+                        if countLabel and countLabel:IsA("TextLabel") then
+                            candyText = countLabel.ContentText or countLabel.Text
+                        end
+                    end
+                end
+            end
+            CandyLabel.Text = "Candy Count - " .. candyText
+            
+            task.wait(0.5)
+        end
+    end)
+end
+
+
+CreateUI()
+
+
+Config.PresentsThread = task.spawn(runPresentsCollection)
+Config.CandyCaneThread = task.spawn(runCandyCaneCollection)
