@@ -2121,7 +2121,7 @@ local function startSystem()
             task.wait(5)
             print("Auto-Re-executing Script...")
             getgenv().AutoStartFarm = true
-            loadstring(game:HttpGet("YOUR_RAW_SCRIPT_URL_HERE"))()
+            loadstring(game:HttpGet("https://raw.githubusercontent.com/alphavalto-svg/99NightsStandaloneCandyFarm/refs/heads/main/V1Candyfarm"))()
         ]])
     end
 
@@ -2550,7 +2550,6 @@ if getgenv().AutoStartFarm then
     print("Auto-Starting Farm...")
     startSystem()
     
-    -- Update GUI Button to reflect running state
     local gui = Services.CoreGui:FindFirstChild("99NightsHelperUI")
     if gui then
         local frame = gui:FindFirstChild("MainFrame")
